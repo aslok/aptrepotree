@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+T=$(echo -e \\\t)
+T2=$T$T
+T3=$T$T2
+N=$IFS
+COLUMNS=1000
+#WIDTH=$[$COLUMNS - 80]
+WIDTH=120
+DPKG_L="$(COLUMNS=$COLUMNS dpkg -l | grep -v ^rc)"
+ARCH=$(if [[ "`uname -m`" = "amd64" ]]; then echo "amd64"; else echo "i386"; fi)
+INSTALLED=$(echo "$DPKG_L" | tail -n +8 | cut -d ' ' -f 3)
+INSTALLED_VERSIONS=($(echo "$DPKG_L" | tail -n +8 | cut -c 250-377))
+#echo "$DPKG_L" | head
+#echo "$INSTALLED" | head
+#echo "${INSTALLED_VERSIONS[0]}"
+#echo "${INSTALLED_VERSIONS[1]}"
+#echo "${INSTALLED_VERSIONS[2]}"
+#echo "${INSTALLED_VERSIONS[3]}"
+#echo "${INSTALLED_VERSIONS[4]}"
+#echo "${INSTALLED_VERSIONS[5]}"
+#echo "${INSTALLED_VERSIONS[6]}"
+#echo "${INSTALLED_VERSIONS[7]}"
+#exit
+for FILE in /etc/apt/sources.list.d/*.list
+do
+	FILE_LINE=$(grep '^deb ' "$FILE")
+	FILE_HOST=$(echo $FILE_LINE | sed 's|deb \(\[.*\)\?http://\([^/]*\).*|\2|')
+	FILE_DESC=http://$FILE_HOST
+	if [[ "$FILE_HOST" == ppa.launchpad.net ]]
+	then
+		PPA=$(echo $FILE_LINE | sed 's|deb http://ppa\.\([^/]*\)/\([^/]*\)/\([^/]*\).*|ppa:\2/\3|;')
+		LAUNCHPAD=$(echo $FILE_LINE | sed 's|deb http://ppa\.\([^/]*\)/\([^/]*\)/\([^/]*\).*|https://\1/~\2/+archive/\3|;')
+		FILE_DESC="$LAUNCHPAD$N    $PPA"
+	fi
+	echo "$(basename $FILE)$N  $FILE_DESC"
+	[[ -z $FILE_LINE ]] && echo "$T DISABLED" && continue
+	PACKAGES_CACHE_FILE=/var/lib/apt/lists/$(echo $FILE_LINE | sed 's|\(deb \)\(\[.*\)\?\(http://.*\)|\1\3|; s|/|_|g; s|deb http:__\([^ ]*\) \([^ ]*\) \([^ ]*\).*|\1_dists_\2_\3_binary-'"$ARCH"'_Packages|; s|_\+|_|g;')
+	if (( $(echo $PACKAGES_CACHE_FILE | wc -w) > 1 ))
+	then
+		PACKAGES_CACHE_FILE=/var/lib/apt/lists/$(echo $FILE_LINE | sed 's|\(deb \)\(\[.*\)\?\(http://.*\)|\1\3|; s|/|_|g; s|deb http:__\([^ ]*\) \([^ ]*\).*|\1_\2_Packages|; s|_\+|_|g;')
+	fi
+	PACKAGES=$(grep ^Package: $PACKAGES_CACHE_FILE | cut -f 2 -d ' ')
+	PACKAGES_VERSIONS=($(grep ^Version: $PACKAGES_CACHE_FILE | cut -f 2 -d ' '))
+	FROM_CURRENT=''
+	FROM_OTHER=''
+	NOT_UPDATED=''
+	NOT_INSTALLED=''
+	PACKAGE_KEY=-1
+	for PACKAGE in $PACKAGES
+	do
+		PACKAGE_KEY=$[$PACKAGE_KEY+1]
+		PACKAGE_INSTALLED=$(echo "$INSTALLED" | grep -n ^$PACKAGE$)
+		if [[ -z $PACKAGE_INSTALLED ]]
+		then
+			(( ${#NOT_INSTALLED} < $WIDTH )) && NOT_INSTALLED="$NOT_INSTALLED $PACKAGE" && (( ${#NOT_INSTALLED} > $WIDTH )) && NOT_INSTALLED=$NOT_INSTALLED...
+			continue
+		fi
+		PACKAGE_INSTALLED_KEY=$[$(echo $PACKAGE_INSTALLED | cut -d ':' -f 1) - 1]
+		if dpkg --compare-versions ${PACKAGES_VERSIONS[$PACKAGE_KEY]} eq ${INSTALLED_VERSIONS[$PACKAGE_INSTALLED_KEY]}
+		then
+			(( ${#FROM_CURRENT} < $WIDTH )) && FROM_CURRENT="$FROM_CURRENT $PACKAGE" && (( ${#FROM_CURRENT} > $WIDTH )) && FROM_CURRENT=$FROM_CURRENT... && break
+			continue
+		fi
+		if dpkg --compare-versions ${PACKAGES_VERSIONS[$PACKAGE_KEY]} gt ${INSTALLED_VERSIONS[$PACKAGE_INSTALLED_KEY]}
+		then
+			(( ${#NOT_UPDATED} < $WIDTH )) && NOT_UPDATED="$NOT_UPDATED $PACKAGE" && (( ${#NOT_UPDATED} > $WIDTH )) && NOT_UPDATED=$NOT_UPDATED...
+			continue
+		fi
+
+		(( ${#FROM_OTHER} < $WIDTH )) && FROM_OTHER="$FROM_OTHER $PACKAGE" && (( ${#FROM_OTHER} > $WIDTH )) && FROM_OTHER=$FROM_OTHER...
+	done
+	SHOW_INSTALLED=$T
+	[[ -n $FROM_CURRENT && ( -n $FROM_OTHER || -n $NOT_UPDATED ) ]] && SHOW_INSTALLED=INSTALLED
+	[[ -n $FROM_OTHER ]] && echo "$T OBSOLETE $T3 $FROM_OTHER"
+	[[ -n $NOT_UPDATED ]] && echo "$T NOT UPDATED $T3 $NOT_UPDATED"
+	[[ -n $FROM_CURRENT ]] && echo "$T $SHOW_INSTALLED $T3 $FROM_CURRENT"
+	[[ -n $NOT_INSTALLED && ( -z $FROM_OTHER && -z $NOT_UPDATED && -z $FROM_CURRENT ) ]] && echo "$T NOT INSTALLED $T3 $NOT_INSTALLED"
+	[[ -z $FROM_OTHER && -z $NOT_UPDATED && -z $FROM_CURRENT && -z $NOT_INSTALLED ]] && echo "$T NO PACKAGES"
+done
+
